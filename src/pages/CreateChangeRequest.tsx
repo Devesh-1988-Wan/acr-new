@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useParams } from 'react-router-dom';
 import { Header } from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ArrowLeft, Save, Send, X } from 'lucide-react';
+import { ArrowLeft, Save, Send, X, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -18,9 +18,12 @@ interface ApproverUser {
 }
 
 const CreateChangeRequest = () => {
+  const { id } = useParams(); // Get ID if editing
   const navigate = useNavigate();
   const { user } = useAuth();
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [availableApprovers, setAvailableApprovers] = useState<ApproverUser[]>([]);
   const [selectedApprovers, setSelectedApprovers] = useState<ApproverUser[]>([]);
   
@@ -39,10 +42,9 @@ const CreateChangeRequest = () => {
     postChecks: '',
   });
 
-  // Fetch real approvers from Supabase
+  // 1. Fetch available approvers
   useEffect(() => {
     const fetchApprovers = async () => {
-      // Get users who have the 'approver' role
       const { data: roleData } = await supabase
         .from('user_roles')
         .select('user_id')
@@ -54,15 +56,60 @@ const CreateChangeRequest = () => {
           .from('profiles')
           .select('id, full_name, email')
           .in('id', userIds);
-        
-        if (profiles) {
-          // Map to correct type if necessary
-          setAvailableApprovers(profiles as ApproverUser[]);
-        }
+        if (profiles) setAvailableApprovers(profiles as ApproverUser[]);
       }
     };
     fetchApprovers();
   }, []);
+
+  // 2. Fetch Existing CR if Editing
+  useEffect(() => {
+    if (!id) return;
+    const fetchCR = async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('change_requests')
+        .select(`*, change_request_approvers(user_id)`)
+        .eq('id', id)
+        .single();
+
+      if (error) {
+        toast.error('Failed to load Change Request');
+        navigate('/change-requests');
+        return;
+      }
+
+      // Populate Form
+      setFormData({
+        description: data.description || '',
+        urlAndEnv: data.url_and_env || '',
+        scopeAndReason: data.scope_and_reason || '',
+        impactAnalysis: data.impact_analysis || '',
+        riskRating: data.risk_rating || '',
+        riskFactor: data.risk_factor || '',
+        riskMitigationWithRollbackPlan: data.risk_mitigation || '',
+        downTime: data.down_time || '',
+        plannedMaintenanceWindow: data.planned_maintenance_window || '',
+        typeOfRequest: data.type_of_request || '',
+        preChecks: data.pre_checks || '',
+        postChecks: data.post_checks || '',
+      });
+
+      // Populate Selected Approvers (Wait for availableApprovers to load effectively)
+      // We fetch the profiles for the already assigned approvers to ensure we have their names
+      const assignedIds = data.change_request_approvers.map((a: any) => a.user_id);
+      if (assignedIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, full_name, email')
+          .in('id', assignedIds);
+        if (profiles) setSelectedApprovers(profiles as ApproverUser[]);
+      }
+
+      setLoading(false);
+    };
+    fetchCR();
+  }, [id, navigate]);
 
   const handleInputChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -84,58 +131,84 @@ const CreateChangeRequest = () => {
     setIsSubmitting(true);
 
     try {
-      // 1. Generate a simple Request ID (e.g., CR-Timestamp)
-      const requestId = `CR-${Date.now().toString().slice(-6)}`;
+      const crPayload = {
+        description: formData.description,
+        url_and_env: formData.urlAndEnv,
+        scope_and_reason: formData.scopeAndReason,
+        impact_analysis: formData.impactAnalysis,
+        risk_rating: formData.riskRating,
+        risk_factor: formData.riskFactor,
+        risk_mitigation: formData.riskMitigationWithRollbackPlan,
+        down_time: formData.downTime,
+        planned_maintenance_window: formData.plannedMaintenanceWindow,
+        type_of_request: formData.typeOfRequest,
+        pre_checks: formData.preChecks,
+        post_checks: formData.postChecks,
+        status: saveAsDraft ? 'Draft' : 'Pending',
+        updated_at: new Date().toISOString(),
+      };
 
-      // 2. Insert the Change Request
-      const { data: crData, error: crError } = await supabase
-        .from('change_requests')
-        .insert({
-          request_id: requestId,
-          description: formData.description,
-          url_and_env: formData.urlAndEnv,
-          scope_and_reason: formData.scopeAndReason,
-          impact_analysis: formData.impactAnalysis,
-          risk_rating: formData.riskRating,
-          risk_factor: formData.riskFactor,
-          risk_mitigation: formData.riskMitigationWithRollbackPlan,
-          down_time: formData.downTime,
-          planned_maintenance_window: formData.plannedMaintenanceWindow,
-          type_of_request: formData.typeOfRequest,
-          pre_checks: formData.preChecks,
-          post_checks: formData.postChecks,
-          status: saveAsDraft ? 'Draft' : 'Pending',
-          created_by: user.id
-        })
-        .select()
-        .single();
+      let crId = id;
 
-      if (crError) throw crError;
-
-      // 3. Insert Approvers
-      if (selectedApprovers.length > 0) {
-        const approverInserts = selectedApprovers.map(approver => ({
-          change_request_id: crData.id,
-          user_id: approver.id,
-          status: 'Pending'
-        }));
-
-        const { error: approverError } = await supabase
-          .from('change_request_approvers')
-          .insert(approverInserts);
-
-        if (approverError) throw approverError;
+      if (id) {
+        // UPDATE Existing
+        const { error } = await supabase
+          .from('change_requests')
+          .update(crPayload)
+          .eq('id', id);
+        if (error) throw error;
+      } else {
+        // CREATE New
+        const requestId = `CR-${Date.now().toString().slice(-6)}`;
+        const { data, error } = await supabase
+          .from('change_requests')
+          .insert({
+            ...crPayload,
+            request_id: requestId,
+            created_by: user.id
+          })
+          .select()
+          .single();
+        if (error) throw error;
+        crId = data.id;
       }
 
-      toast.success(saveAsDraft ? 'Saved as draft' : 'Submitted successfully');
+      // Sync Approvers (Simple Strategy: Delete all pending and re-insert selected)
+      // Warning: In a complex real-world app, you'd carefully merge to preserve 'Approved' statuses.
+      // Here, we assume editing a CR might require re-approval.
+      if (crId) {
+        // 1. Remove existing approvers for this CR
+        await supabase.from('change_request_approvers').delete().eq('change_request_id', crId);
+        
+        // 2. Insert selected
+        if (selectedApprovers.length > 0) {
+          const approverInserts = selectedApprovers.map(approver => ({
+            change_request_id: crId,
+            user_id: approver.id,
+            status: 'Pending'
+          }));
+          const { error: appError } = await supabase.from('change_request_approvers').insert(approverInserts);
+          if (appError) throw appError;
+
+          // 3. Send Email Notification (Simulated)
+          if (!saveAsDraft) {
+             console.log('Sending emails to:', selectedApprovers.map(a => a.email));
+             // supabase.functions.invoke('send-approval-email', { crId, approvers: selectedApprovers });
+          }
+        }
+      }
+
+      toast.success(saveAsDraft ? 'Saved as draft' : (id ? 'Updated successfully' : 'Submitted successfully'));
       navigate('/change-requests');
 
     } catch (error: any) {
-      toast.error('Error creating request', { description: error.message });
+      toast.error('Error saving request', { description: error.message });
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin" /></div>;
 
   return (
     <div className="min-h-screen bg-background">
@@ -145,8 +218,8 @@ const CreateChangeRequest = () => {
           <ArrowLeft className="h-4 w-4" /> Back to Change Requests
         </Link>
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-foreground">Create Change Request</h1>
-          <p className="text-muted-foreground mt-1">Fill in the details below to create a new change request</p>
+          <h1 className="text-3xl font-bold text-foreground">{id ? 'Edit Change Request' : 'Create Change Request'}</h1>
+          <p className="text-muted-foreground mt-1">Fill in the details below</p>
         </div>
 
         <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); handleSubmit(false); }}>
@@ -274,7 +347,7 @@ const CreateChangeRequest = () => {
               <Save className="h-4 w-4 mr-2" /> Save as Draft
             </Button>
             <Button type="submit" variant="hero" disabled={isSubmitting || selectedApprovers.length === 0}>
-              <Send className="h-4 w-4 mr-2" /> Submit for Approval
+              <Send className="h-4 w-4 mr-2" /> {id ? 'Update Request' : 'Submit for Approval'}
             </Button>
           </div>
         </form>
