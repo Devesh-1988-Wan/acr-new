@@ -30,6 +30,7 @@ const App = () => (
             <Route path="/change-requests/new" element={<CreateChangeRequest />} />
             <Route path="/change-requests/:id" element={<ChangeRequestDetail />} />
             <Route path="/approvers" element={<Approvers />} />
+            <Route path="/change-requests/:id/edit" element={<CreateChangeRequest />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
