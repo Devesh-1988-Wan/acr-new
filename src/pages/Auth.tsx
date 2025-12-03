@@ -1,14 +1,21 @@
-import { useState } from 'react';
-import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { FileText, Mail, Lock, User, ArrowRight } from 'lucide-react';
+import { FileText, Mail, Lock, User, ArrowRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useAuth } from '@/hooks/useAuth';
+import { z } from 'zod';
+
+const emailSchema = z.string().email('Invalid email address').max(255);
+const passwordSchema = z.string().min(6, 'Password must be at least 6 characters').max(100);
+const nameSchema = z.string().min(1, 'Name is required').max(100);
 
 const Auth = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { user, loading: authLoading, signIn, signUp } = useAuth();
   const [isSignUp, setIsSignUp] = useState(searchParams.get('mode') === 'signup');
   const [isLoading, setIsLoading] = useState(false);
   
@@ -19,6 +26,12 @@ const Auth = () => {
     confirmPassword: '',
   });
 
+  useEffect(() => {
+    if (user && !authLoading) {
+      navigate('/dashboard');
+    }
+  }, [user, authLoading, navigate]);
+
   const handleInputChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
@@ -27,8 +40,20 @@ const Auth = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // Validate inputs
+    try {
+      emailSchema.parse(formData.email);
+      passwordSchema.parse(formData.password);
+      if (isSignUp) {
+        nameSchema.parse(formData.name);
+      }
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        toast.error(err.errors[0].message);
+        setIsLoading(false);
+        return;
+      }
+    }
 
     if (isSignUp) {
       if (formData.password !== formData.confirmPassword) {
@@ -36,10 +61,35 @@ const Auth = () => {
         setIsLoading(false);
         return;
       }
+      
+      const { error } = await signUp(formData.email, formData.password, formData.name);
+      
+      if (error) {
+        if (error.message.includes('already registered')) {
+          toast.error('An account with this email already exists');
+        } else {
+          toast.error(error.message);
+        }
+        setIsLoading(false);
+        return;
+      }
+      
       toast.success('Account created successfully!', {
         description: 'Please check your email to verify your account.',
       });
     } else {
+      const { error } = await signIn(formData.email, formData.password);
+      
+      if (error) {
+        if (error.message.includes('Invalid login')) {
+          toast.error('Invalid email or password');
+        } else {
+          toast.error(error.message);
+        }
+        setIsLoading(false);
+        return;
+      }
+      
       toast.success('Welcome back!', {
         description: 'You have been signed in successfully.',
       });
@@ -48,6 +98,14 @@ const Auth = () => {
 
     setIsLoading(false);
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -195,7 +253,12 @@ const Auth = () => {
             )}
 
             <Button type="submit" variant="hero" className="w-full" size="lg" disabled={isLoading}>
-              {isLoading ? 'Please wait...' : isSignUp ? 'Create Account' : 'Sign In'}
+              {isLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Please wait...
+                </>
+              ) : isSignUp ? 'Create Account' : 'Sign In'}
             </Button>
           </form>
 

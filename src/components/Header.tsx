@@ -1,16 +1,21 @@
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { FileText, LayoutDashboard, Users, LogOut, Plus, Settings } from 'lucide-react';
+import { FileText, LayoutDashboard, Users, LogOut, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/hooks/useAuth';
 
-interface HeaderProps {
-  isAuthenticated?: boolean;
-  userName?: string;
-  onLogout?: () => void;
-}
-
-export const Header = ({ isAuthenticated = true, userName = 'John Doe', onLogout }: HeaderProps) => {
+export const Header = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, signOut, roles } = useAuth();
+  
+  const isAuthenticated = !!user;
+  const userName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate('/');
+  };
 
   const navItems = [
     { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -70,7 +75,7 @@ export const Header = ({ isAuthenticated = true, userName = 'John Doe', onLogout
                 <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary font-medium">
                   {userName.split(' ').map(n => n[0]).join('')}
                 </div>
-                <Button variant="ghost" size="icon" onClick={onLogout}>
+                <Button variant="ghost" size="icon" onClick={handleLogout}>
                   <LogOut className="h-4 w-4" />
                 </Button>
               </div>
